@@ -25,7 +25,7 @@ pub fn main() -> anyhow::Result<()> {
     let start = Instant::now();
     let cli = Cli::parse();
 
-    let target_paths = cli.paths;
+    let target_paths = resolve_paths(cli.paths);
     let ignore_globs = cli.ignore_globs;
 
     let target_paths = parallel_build_path_iterator(&target_paths, &ignore_globs)?;
@@ -77,6 +77,13 @@ pub fn main() -> anyhow::Result<()> {
         &mut stream,
     )?;
     Ok(())
+}
+
+fn resolve_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .map(|path| path.canonicalize().unwrap())
+        .collect()
 }
 
 static PYTHON_INIT_FILE: &str = "__init__.py";
