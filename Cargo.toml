@@ -1,7 +1,7 @@
 [package]
 name = "undead"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["Alexandre Pasmantier <alex.pasmant@gmail.com>"]
 license = "Apache-2.0"
 description = "A tool to search for dead code in your Python projects"
