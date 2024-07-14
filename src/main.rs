@@ -200,7 +200,6 @@ fn render_as_import_string(path: &Path, python_root: &Path) -> String {
     result.to_string().replace(MAIN_SEPARATOR_STR, ".")
 }
 
-// StmtImportFrom { range: 473..588, module: Some(Identifier("new_org.norms.international_tax_agreements.ingestion.common.s3")), names: [Alias { range: 554..585, name: Identifier("build_agreement_metadata_s3_key"), asname: None }], level: Some(Int(0)) }
 fn extract_imports(path: &Path, python_root: &Path) -> anyhow::Result<Vec<Import>> {
     let file_contents = std::fs::read_to_string(path)?;
     match parse(&file_contents, Mode::Module, "<embedded>") {

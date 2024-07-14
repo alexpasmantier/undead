@@ -1,8 +1,8 @@
 use std::fmt;
 use std::io::Write;
 use std::{io::IsTerminal, time::Duration};
-use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
-use terminal_size::{terminal_size, Height, Width};
+use termcolor::{Color, ColorSpec, StandardStream, WriteColor};
+use terminal_size::{terminal_size, Width};
 
 pub enum Printable<'a> {
     Message(String),
