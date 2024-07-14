@@ -49,11 +49,12 @@ pub fn main() -> anyhow::Result<()> {
         .map(|path| render_as_import_string(&path, python_root))
         .collect::<Vec<String>>();
 
-    let dead_files = potentially_dead_modules
+    let mut dead_files = potentially_dead_modules
         .into_par_iter()
         .filter(|module| !imports_hash_set.contains(module))
         .map(|module| module.replace(".", MAIN_SEPARATOR_STR) + PYTHON_EXTENSION)
         .collect::<Vec<String>>();
+    dead_files.sort();
 
     let printer = printer::TerminalPrinter {};
     let mut stream = termcolor::StandardStream::stdout(termcolor::ColorChoice::Auto);
