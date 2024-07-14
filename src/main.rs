@@ -1,7 +1,6 @@
 use crate::cli::Cli;
 use clap::Parser;
 use crossbeam::queue::SegQueue;
-use dashmap::DashMap;
 use grep::{
     matcher::Matcher,
     regex::RegexMatcher,
@@ -26,26 +25,52 @@ pub fn main() -> anyhow::Result<()> {
     let ignore_paths = cli.ignore_paths;
 
     let target_paths = parallel_build_path_iterator(&target_paths, &ignore_paths)?;
-    let no_entrypoint_paths = target_paths
-        .clone()
-        .into_par_iter()
-        .filter(|path| file_contains_name_equals_main(path).unwrap());
-
     let python_root = find_python_project_root(&target_paths[0]).unwrap();
 
-    let all_paths = parallel_build_path_iterator(&vec![python_root], &ignore_paths)?;
-    let imports = compile_imports(all_paths, &python_root)?;
+    let no_entrypoint_paths = target_paths.clone().into_par_iter().filter(|path| {
+        if let Some(file_name) = path.file_name() {
+            if file_name.to_string_lossy().to_string() == PYTHON_INIT_FILE {
+                return false;
+            }
+        }
+        return !file_contains_name_equals_main(path).unwrap();
+    });
+
+    let all_paths = parallel_build_path_iterator(&vec![python_root.to_path_buf()], &ignore_paths)?;
+    let imports = resolve_imports(compile_imports(all_paths, &python_root)?);
 
     let imports_hash_set: HashSet<String> = imports.iter().cloned().collect();
 
     let potentially_dead_modules = no_entrypoint_paths
-        .map(convert_path_to_module)
+        .map(|path| render_as_import_string(&path, python_root))
         .collect::<Vec<String>>();
     potentially_dead_modules
         .into_par_iter()
         .filter(|module| !imports_hash_set.contains(module))
-        .for_each(|module| println!("{}", module));
+        .for_each(|module| {
+            println!(
+                "{}",
+                module.replace(".", MAIN_SEPARATOR_STR) + PYTHON_EXTENSION
+            )
+        });
     Ok(())
+}
+
+static PYTHON_INIT_FILE: &str = "__init__.py";
+static PYTHON_EXTENSION: &str = ".py";
+
+fn resolve_imports(imports: Vec<Import>) -> Vec<String> {
+    let mut resolved_imports = vec![];
+    for import in imports {
+        match import {
+            Import::Module(module) => resolved_imports.push(module),
+            Import::Package(mut package) => {
+                package.push_str(PYTHON_INIT_FILE);
+                resolved_imports.push(package);
+            }
+        }
+    }
+    resolved_imports
 }
 
 fn compile_imports(python_files: Vec<PathBuf>, python_root: &Path) -> anyhow::Result<Vec<Import>> {
@@ -110,10 +135,10 @@ impl Import {
                 base_import_path = python_root.to_path_buf();
             }
         }
-        let mut full_import_path: PathBuf;
-        if let Some(module) = import_from.module {
+        let mut full_import_path: PathBuf = base_import_path;
+        if let Some(module) = import_from.module.as_ref() {
             full_import_path =
-                base_import_path.join(module.to_string().replace(".", MAIN_SEPARATOR_STR));
+                full_import_path.join(module.to_string().replace(".", MAIN_SEPARATOR_STR));
             if full_import_path.is_file() {
                 return vec![Import::Module(render_as_import_string(
                     &full_import_path,
@@ -139,11 +164,15 @@ impl Import {
 }
 
 fn render_as_import_string(path: &Path, python_root: &Path) -> String {
-    path.to_string_lossy()
-        .strip_prefix(python_root.to_string_lossy().as_ref())
-        .unwrap()
-        .to_string()
-        .replace(MAIN_SEPARATOR_STR, ".")
+    let mut prefix = python_root.to_string_lossy().to_string();
+    prefix.push_str(MAIN_SEPARATOR_STR);
+    let mut result = path.to_string_lossy().to_string();
+    result = result.strip_prefix(&prefix).unwrap_or(&result).to_string();
+    result = result
+        .strip_suffix(PYTHON_EXTENSION)
+        .unwrap_or(&result)
+        .to_string();
+    result.to_string().replace(MAIN_SEPARATOR_STR, ".")
 }
 
 // StmtImportFrom { range: 473..588, module: Some(Identifier("new_org.norms.international_tax_agreements.ingestion.common.s3")), names: [Alias { range: 554..585, name: Identifier("build_agreement_metadata_s3_key"), asname: None }], level: Some(Int(0)) }
@@ -170,10 +199,6 @@ fn extract_imports(path: &Path, python_root: &Path) -> anyhow::Result<Vec<Import
         }
         _ => Err(anyhow::anyhow!("Error parsing file: {:?}", path)),
     }
-}
-
-fn convert_path_to_module(path: PathBuf) -> String {
-    path.to_string_lossy().replace(MAIN_SEPARATOR_STR, ".")
 }
 
 fn parallel_build_path_iterator(
@@ -252,12 +277,12 @@ fn is_python_project_root(dir: &Path) -> bool {
 }
 
 /// Finds the root path of a Python project starting from a given directory.
-fn find_python_project_root(start_dir: &Path) -> Option<PathBuf> {
+fn find_python_project_root(start_dir: &Path) -> Option<&Path> {
     let mut current_dir = start_dir;
 
     loop {
         if is_python_project_root(current_dir) {
-            return Some(current_dir.to_path_buf());
+            return Some(current_dir);
         }
 
         // Move to the parent directory

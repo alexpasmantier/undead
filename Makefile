@@ -1,4 +1,4 @@
-DEBUGGING_FILE = /home/alex/code/python/data-doctrine/new_org/norms/international_tax_agreements
+DEBUGGING_FILE = /home/alex/code/python/data-doctrine
 
 debug:
 	@cargo build
