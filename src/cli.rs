@@ -7,4 +7,8 @@ use clap::Parser;
 pub struct Cli {
     /// paths in which to recursively search for dead files
     pub paths: Vec<PathBuf>,
+
+    /// paths to ignore when searching for dead files
+    #[clap(short = 'I', long)]
+    pub ignore_paths: Vec<PathBuf>,
 }
