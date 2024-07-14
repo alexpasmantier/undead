@@ -9,7 +9,7 @@ readme = "README.md"
 homepage = "https://github.com/alexpasmantier/undead"
 repository = "https://github.com/alexpasmantier/undead"
 keywords = ["cli", "search", "dead-code", "python", "rust"]
-categories = ["command-line-utilities", "development-tools", "programming-tools", "python"]
+categories = ["command-line-utilities", "command-line-interface", "concurrency", "development-tools", "parsing"]
 
 [dependencies]
 anyhow = "1.0.86"
