@@ -8,23 +8,27 @@ use grep::{
 };
 use ignore::{types::TypesBuilder, DirEntry, WalkBuilder};
 
+use crate::printer::Printer;
 use rayon::prelude::*;
-use rustpython_ast::{Mod, ModModule, Stmt, StmtImport, StmtImportFrom};
+use rustpython_ast::{Mod, ModModule, Stmt, StmtImport, StmtImportFrom, Visitor};
 use rustpython_parser::{parse, Mode};
+use std::time::Instant;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf, MAIN_SEPARATOR_STR},
 };
 
 mod cli;
+mod printer;
 
 pub fn main() -> anyhow::Result<()> {
+    let start = Instant::now();
     let cli = Cli::parse();
 
     let target_paths = cli.paths;
-    let ignore_paths = cli.ignore_paths;
+    let ignore_globs = cli.ignore_globs;
 
-    let target_paths = parallel_build_path_iterator(&target_paths, &ignore_paths)?;
+    let target_paths = parallel_build_path_iterator(&target_paths, &ignore_globs)?;
     let python_root = find_python_project_root(&target_paths[0]).unwrap();
 
     let no_entrypoint_paths = target_paths.clone().into_par_iter().filter(|path| {
@@ -36,23 +40,42 @@ pub fn main() -> anyhow::Result<()> {
         return !file_contains_name_equals_main(path).unwrap();
     });
 
-    let all_paths = parallel_build_path_iterator(&vec![python_root.to_path_buf()], &ignore_paths)?;
-    let imports = resolve_imports(compile_imports(all_paths, &python_root)?);
+    let all_paths = parallel_build_path_iterator(&vec![python_root.to_path_buf()], &ignore_globs)?;
+    let imports = resolve_imports(compile_imports(&all_paths, &python_root)?);
 
     let imports_hash_set: HashSet<String> = imports.iter().cloned().collect();
 
     let potentially_dead_modules = no_entrypoint_paths
         .map(|path| render_as_import_string(&path, python_root))
         .collect::<Vec<String>>();
-    potentially_dead_modules
+
+    let dead_files = potentially_dead_modules
         .into_par_iter()
         .filter(|module| !imports_hash_set.contains(module))
-        .for_each(|module| {
-            println!(
-                "{}",
-                module.replace(".", MAIN_SEPARATOR_STR) + PYTHON_EXTENSION
-            )
-        });
+        .map(|module| module.replace(".", MAIN_SEPARATOR_STR) + PYTHON_EXTENSION)
+        .collect::<Vec<String>>();
+
+    let printer = printer::TerminalPrinter {};
+    let mut stream = termcolor::StandardStream::stdout(termcolor::ColorChoice::Auto);
+    printer.print(printer::Printable::Separator, &mut stream)?;
+    for dead_file in dead_files.iter() {
+        printer.print(
+            printer::Printable::DeadFile(printer::DeadFile {
+                repr: dead_file,
+                full_path: python_root.join(dead_file).to_str().unwrap(),
+            }),
+            &mut stream,
+        )?;
+    }
+    printer.print(printer::Printable::Separator, &mut stream)?;
+    printer.print(
+        printer::Printable::Stats(printer::Stats {
+            scanned_files: &all_paths.len(),
+            dead_files: &dead_files.len(),
+            duration: start.elapsed(),
+        }),
+        &mut stream,
+    )?;
     Ok(())
 }
 
@@ -73,7 +96,7 @@ fn resolve_imports(imports: Vec<Import>) -> Vec<String> {
     resolved_imports
 }
 
-fn compile_imports(python_files: Vec<PathBuf>, python_root: &Path) -> anyhow::Result<Vec<Import>> {
+fn compile_imports(python_files: &Vec<PathBuf>, python_root: &Path) -> anyhow::Result<Vec<Import>> {
     let imports_queue = SegQueue::<Import>::new();
     python_files
         .par_iter()
@@ -87,9 +110,11 @@ fn compile_imports(python_files: Vec<PathBuf>, python_root: &Path) -> anyhow::Re
             Err(_) => return Err(()),
         })
         .collect::<Vec<_>>();
+
     Ok(imports_queue.into_iter().collect())
 }
 
+#[derive(Debug, PartialEq, Clone)]
 enum Import {
     Module(String),
     Package(String),
@@ -139,7 +164,7 @@ impl Import {
         if let Some(module) = import_from.module.as_ref() {
             full_import_path =
                 full_import_path.join(module.to_string().replace(".", MAIN_SEPARATOR_STR));
-            if full_import_path.is_file() {
+            if !full_import_path.is_dir() {
                 return vec![Import::Module(render_as_import_string(
                     &full_import_path,
                     python_root,
@@ -151,12 +176,12 @@ impl Import {
             .iter()
             .map(|alias| {
                 let alias_name = alias.name.to_string();
-                full_import_path = full_import_path.join(alias_name);
-                let full_import = render_as_import_string(&full_import_path, python_root);
-                if full_import_path.is_dir() {
-                    Import::Package(full_import)
+                let final_import_path = full_import_path.join(alias_name);
+                let final_import = render_as_import_string(&final_import_path, python_root);
+                if final_import_path.is_dir() {
+                    Import::Package(final_import)
                 } else {
-                    Import::Module(full_import)
+                    Import::Module(final_import)
                 }
             })
             .collect()
@@ -184,28 +209,47 @@ fn extract_imports(path: &Path, python_root: &Path) -> anyhow::Result<Vec<Import
             body,
             type_ignores: __,
         })) => {
-            let imported_modules = body
-                .iter()
-                .map(|stmt| match stmt {
-                    Stmt::Import(import) => Import::from_import(import, python_root),
-                    Stmt::ImportFrom(import_from) => {
-                        Import::from_import_from(import_from, path, python_root)
-                    }
-                    _ => vec![],
-                })
-                .flatten()
-                .collect();
-            Ok(imported_modules)
+            let mut visitor = ImportVisitor {
+                imports: vec![],
+                python_root: python_root.to_path_buf(),
+                current_file_path: path.to_path_buf(),
+            };
+            // it seems rustpython's asts don't implement accept
+            body.iter()
+                .for_each(|stmt| visitor.visit_stmt(stmt.clone()));
+            Ok(visitor.imports)
         }
         _ => Err(anyhow::anyhow!("Error parsing file: {:?}", path)),
     }
 }
 
+#[derive(Debug, Clone)]
+struct ImportVisitor {
+    pub imports: Vec<Import>,
+    pub python_root: PathBuf,
+    pub current_file_path: PathBuf,
+}
+
+impl Visitor for ImportVisitor {
+    fn visit_stmt_import(&mut self, stmt: StmtImport) {
+        self.imports
+            .extend(Import::from_import(&stmt, &self.python_root));
+    }
+
+    fn visit_stmt_import_from(&mut self, stmt: StmtImportFrom) {
+        self.imports.extend(Import::from_import_from(
+            &stmt,
+            &self.current_file_path,
+            &self.python_root,
+        ));
+    }
+}
+
 fn parallel_build_path_iterator(
     paths: &Vec<PathBuf>,
-    ignore_paths: &Vec<PathBuf>,
+    ignore_globs: &Vec<PathBuf>,
 ) -> anyhow::Result<Vec<PathBuf>> {
-    let walk_builder = walk_builder(paths, ignore_paths);
+    let walk_builder = walk_builder(paths, ignore_globs);
     let file_queue = SegQueue::<PathBuf>::new();
     walk_builder.build_parallel().run(|| {
         Box::new(
@@ -229,7 +273,7 @@ fn parallel_build_path_iterator(
     Ok(file_queue.into_iter().collect())
 }
 
-fn walk_builder(paths: &Vec<PathBuf>, ignore_paths: &Vec<PathBuf>) -> WalkBuilder {
+fn walk_builder(paths: &[PathBuf], ignore_globs: &[PathBuf]) -> WalkBuilder {
     let mut types_builder = TypesBuilder::new();
     types_builder.add_defaults().select("python");
 
@@ -237,10 +281,15 @@ fn walk_builder(paths: &Vec<PathBuf>, ignore_paths: &Vec<PathBuf>) -> WalkBuilde
     for path in paths.iter().skip(1) {
         walk_builder.add(path);
     }
-    // FIXME: this doesn't work
-    for ignore in ignore_paths.iter() {
-        walk_builder.add_ignore(ignore);
-    }
+    let globs = ignore_globs.to_vec();
+    walk_builder.filter_entry(move |entry| {
+        for ignore in globs.iter() {
+            if entry.path().ends_with(ignore) {
+                return false;
+            }
+        }
+        true
+    });
     walk_builder.types(types_builder.build().unwrap());
     walk_builder
 }
@@ -293,4 +342,38 @@ fn find_python_project_root(start_dir: &Path) -> Option<&Path> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_import_from() {
+        let current_file_path = Path::new("/e/f/g/h.py");
+        let python_root = Path::new("/e/f");
+        match parse("from a.b import c, d", Mode::Module, "<embedded>") {
+            Ok(Mod::Module(ModModule {
+                range: _,
+                body,
+                type_ignores: _,
+            })) => {
+                let imports: Vec<Import> = body
+                    .iter()
+                    .map(|stmt| match stmt {
+                        Stmt::Import(import) => Import::from_import(import, python_root),
+                        Stmt::ImportFrom(import_from) => {
+                            Import::from_import_from(import_from, current_file_path, python_root)
+                        }
+                        _ => vec![],
+                    })
+                    .flatten()
+                    .collect();
+                assert_eq!(imports.len(), 2);
+                assert_eq!(imports[0], Import::Module("a.b.c".to_string()));
+                assert_eq!(imports[1], Import::Module("a.b.d".to_string()));
+            }
+            _ => assert!(false),
+        };
+    }
 }

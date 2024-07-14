@@ -1,4 +1,4 @@
-DEBUGGING_FILE = /home/alex/code/python/data-doctrine
+DEBUGGING_PATH = /some/path/to/a/dir
 
 debug:
 	@cargo build
@@ -9,7 +9,7 @@ run:
 	@make run-release-binary
 
 run-release-binary:
-	@./target/release/undead ${DEBUGGING_FILE}
+	@./target/release/undead ${DEBUGGING_PATH}
 
 run-debug-binary:
-	@./target/debug/undead ${DEBUGGING_FILE}
+	@./target/debug/undead ${DEBUGGING_PATH}

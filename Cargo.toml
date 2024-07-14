@@ -1,9 +1,15 @@
 [package]
 name = "undead"
 version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+edition = "2024"
+authors = ["Alexandre Pasmantier <alex.pasmant@gmail.com>"]
+license = "Apache-2.0"
+description = "A tool to search for dead code in your Python projects"
+readme = "README.md"
+homepage = "https://github.com/alexpasmantier/undead"
+repository = "https://github.com/alexpasmantier/undead"
+keywords = ["cli", "search", "dead-code", "python", "rust"]
+categories = ["command-line-utilities", "development-tools", "programming-tools", "python"]
 
 [dependencies]
 anyhow = "1.0.86"
@@ -12,6 +18,8 @@ crossbeam = { version = "0.8.4", features = ["crossbeam-queue"] }
 grep = "0.3.1"
 ignore = "0.4.22"
 rayon = "1.10.0"
-rustpython-ast = "0.3.1"
+rustpython-ast = { version = "0.3.1", features = ["visitor"] }
 rustpython-parser = "0.3.1"
+termcolor = "1.4.1"
+terminal_size = "0.3.0"
 walkdir = "2.5.0"
