@@ -40,7 +40,7 @@ pub fn main() -> anyhow::Result<()> {
         return !file_contains_name_equals_main(path).unwrap();
     });
 
-    let all_paths = parallel_build_path_iterator(&vec![python_root.to_path_buf()], &ignore_globs)?;
+    let all_paths = parallel_build_path_iterator(&vec![python_root.to_path_buf()], &Vec::new())?;
     let imports = resolve_imports(compile_imports(&all_paths, &python_root)?);
 
     let imports_hash_set: HashSet<String> = imports.iter().cloned().collect();
