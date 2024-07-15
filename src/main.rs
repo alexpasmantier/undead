@@ -26,9 +26,9 @@ pub fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let target_paths = resolve_paths(cli.paths);
-    let ignore_globs = cli.ignore_globs;
+    let ignore_paths = cli.ignore_paths;
 
-    let target_paths = parallel_build_path_iterator(&target_paths, &ignore_globs)?;
+    let target_paths = parallel_build_path_iterator(&target_paths, &ignore_paths)?;
     let python_root = find_python_project_root(&target_paths[0]).unwrap();
 
     let no_entrypoint_paths = target_paths.clone().into_par_iter().filter(|path| {
@@ -254,9 +254,9 @@ impl Visitor for ImportVisitor {
 
 fn parallel_build_path_iterator(
     paths: &Vec<PathBuf>,
-    ignore_globs: &Vec<PathBuf>,
+    ignore_paths: &Vec<PathBuf>,
 ) -> anyhow::Result<Vec<PathBuf>> {
-    let walk_builder = walk_builder(paths, ignore_globs);
+    let walk_builder = walk_builder(paths, ignore_paths);
     let file_queue = SegQueue::<PathBuf>::new();
     walk_builder.build_parallel().run(|| {
         Box::new(
@@ -280,7 +280,7 @@ fn parallel_build_path_iterator(
     Ok(file_queue.into_iter().collect())
 }
 
-fn walk_builder(paths: &[PathBuf], ignore_globs: &[PathBuf]) -> WalkBuilder {
+fn walk_builder(paths: &[PathBuf], ignore_paths: &[PathBuf]) -> WalkBuilder {
     let mut types_builder = TypesBuilder::new();
     types_builder.add_defaults().select("python");
 
@@ -288,9 +288,9 @@ fn walk_builder(paths: &[PathBuf], ignore_globs: &[PathBuf]) -> WalkBuilder {
     for path in paths.iter().skip(1) {
         walk_builder.add(path);
     }
-    let globs = ignore_globs.to_vec();
+    let ignored_paths = ignore_paths.to_vec();
     walk_builder.filter_entry(move |entry| {
-        for ignore in globs.iter() {
+        for ignore in ignored_paths.iter() {
             if entry.path().ends_with(ignore) {
                 return false;
             }
